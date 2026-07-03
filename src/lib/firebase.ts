@@ -21,17 +21,46 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
+  let isUnsubscribed = false;
+
+  // Helper to handle success
+  const handleSuccess = (user: User, token: string) => {
+    if (isUnsubscribed) return;
+    cachedAccessToken = token;
+    localStorage.setItem('oauth_access_token', token);
+    if (onAuthSuccess) onAuthSuccess(user, token);
+  };
+
+  // Helper to handle failure
+  const handleFailure = () => {
+    if (isUnsubscribed) return;
+    cachedAccessToken = null;
+    localStorage.removeItem('oauth_access_token');
+    if (onAuthFailure) onAuthFailure();
+  };
+
   // 1. Handle redirect result
   getRedirectResult(auth)
     .then((result) => {
       isRedirectResultHandled = true;
+      if (isUnsubscribed) return;
       if (result) {
         const credential = GoogleAuthProvider.credentialFromResult(result);
         if (credential?.accessToken) {
-          cachedAccessToken = credential.accessToken;
-          sessionStorage.setItem('oauth_access_token', cachedAccessToken);
-          if (result.user && onAuthSuccess) {
-            onAuthSuccess(result.user, cachedAccessToken);
+          handleSuccess(result.user, credential.accessToken);
+          return;
+        }
+      }
+      
+      // If getRedirectResult finished but returned no credentials, check current auth state
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        const savedToken = cachedAccessToken || localStorage.getItem('oauth_access_token');
+        if (savedToken) {
+          handleSuccess(currentUser, savedToken);
+        } else {
+          if (!isSigningIn) {
+            handleFailure();
           }
         }
       }
@@ -39,33 +68,43 @@ export const initAuth = (
     .catch((error) => {
       isRedirectResultHandled = true;
       console.error('Redirect sign-in error:', error);
+      if (isUnsubscribed) return;
+      if (!isSigningIn) {
+        handleFailure();
+      }
     });
   
   // 2. Listen to auth state changes
-  return onAuthStateChanged(auth, (user: User | null) => {
+  const unsubscribe = onAuthStateChanged(auth, (user: User | null) => {
+    if (isUnsubscribed) return;
     if (user) {
-      const savedToken = cachedAccessToken || sessionStorage.getItem('oauth_access_token');
+      const savedToken = cachedAccessToken || localStorage.getItem('oauth_access_token');
       if (savedToken) {
-        cachedAccessToken = savedToken;
-        if (onAuthSuccess) onAuthSuccess(user, savedToken);
+        handleSuccess(user, savedToken);
       } else {
-        // Wait a brief moment to see if getRedirectResult finishes resolving
-        setTimeout(() => {
-          const updatedToken = cachedAccessToken || sessionStorage.getItem('oauth_access_token');
-          if (updatedToken) {
-            cachedAccessToken = updatedToken;
-            if (onAuthSuccess) onAuthSuccess(user, updatedToken);
-          } else {
-            if (onAuthFailure) onAuthFailure();
-          }
-        }, 1200);
+        if (isSigningIn) {
+          // Currently in the middle of a sign-in flow, let that flow handle it
+          return;
+        }
+        // If redirect result is still being processed, wait for it
+        if (!isRedirectResultHandled) {
+          return;
+        }
+        // If redirect result is already handled and we still don't have a token, we fail
+        handleFailure();
       }
     } else {
-      cachedAccessToken = null;
-      sessionStorage.removeItem('oauth_access_token');
-      if (onAuthFailure) onAuthFailure();
+      if (isSigningIn) {
+        return;
+      }
+      handleFailure();
     }
   });
+
+  return () => {
+    isUnsubscribed = true;
+    unsubscribe();
+  };
 };
 
 // Must be called from a button click
@@ -79,7 +118,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     }
 
     cachedAccessToken = credential.accessToken;
-    sessionStorage.setItem('oauth_access_token', cachedAccessToken);
+    localStorage.setItem('oauth_access_token', cachedAccessToken);
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Sign in error:', error);
@@ -96,11 +135,11 @@ export const googleSignInWithRedirect = async (): Promise<void> => {
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  return cachedAccessToken || localStorage.getItem('oauth_access_token');
 };
 
 export const logout = async () => {
   await signOut(auth);
   cachedAccessToken = null;
-  sessionStorage.removeItem('oauth_access_token');
+  localStorage.removeItem('oauth_access_token');
 };
