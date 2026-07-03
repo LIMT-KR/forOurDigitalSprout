@@ -14,6 +14,7 @@ provider.addScope('https://www.googleapis.com/auth/userinfo.email');
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
+let isRedirectResultHandled = false;
 
 // Initialize auth state listener.
 export const initAuth = (
@@ -23,34 +24,55 @@ export const initAuth = (
   // Check redirect result on initialization
   getRedirectResult(auth)
     .then((result) => {
+      isRedirectResultHandled = true;
       if (result) {
         const credential = GoogleAuthProvider.credentialFromResult(result);
         if (credential?.accessToken) {
           cachedAccessToken = credential.accessToken;
+          sessionStorage.setItem('oauth_access_token', cachedAccessToken);
           if (result.user && onAuthSuccess) {
             onAuthSuccess(result.user, cachedAccessToken);
+            return;
           }
         }
       }
+      
+      // If there was no redirect result, but we have an active user with cached token, we succeed
+      const user = auth.currentUser;
+      if (user) {
+        const savedToken = cachedAccessToken || sessionStorage.getItem('oauth_access_token');
+        if (savedToken) {
+          cachedAccessToken = savedToken;
+          if (onAuthSuccess) onAuthSuccess(user, savedToken);
+        } else {
+          if (onAuthFailure) onAuthFailure();
+        }
+      } else {
+        if (onAuthFailure) onAuthFailure();
+      }
     })
     .catch((error) => {
+      isRedirectResultHandled = true;
       console.error('Redirect sign-in error:', error);
+      if (onAuthFailure) onAuthFailure();
     });
   
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        // Wait a brief moment to see if getRedirectResult is currently resolving
-        setTimeout(() => {
-          if (!cachedAccessToken && !isSigningIn) {
-            if (onAuthFailure) onAuthFailure();
-          }
-        }, 800);
+      const savedToken = cachedAccessToken || sessionStorage.getItem('oauth_access_token');
+      if (savedToken) {
+        cachedAccessToken = savedToken;
+        if (onAuthSuccess) onAuthSuccess(user, savedToken);
+      } else {
+        // Wait for redirect result to finish
+        if (!isRedirectResultHandled) {
+          return;
+        }
+        if (onAuthFailure) onAuthFailure();
       }
     } else {
       cachedAccessToken = null;
+      sessionStorage.removeItem('oauth_access_token');
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -67,6 +89,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     }
 
     cachedAccessToken = credential.accessToken;
+    sessionStorage.setItem('oauth_access_token', cachedAccessToken);
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Sign in error:', error);
@@ -89,4 +112,5 @@ export const getAccessToken = async (): Promise<string | null> => {
 export const logout = async () => {
   await signOut(auth);
   cachedAccessToken = null;
+  sessionStorage.removeItem('oauth_access_token');
 };
