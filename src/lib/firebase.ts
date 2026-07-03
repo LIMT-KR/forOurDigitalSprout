@@ -2,7 +2,21 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, User, signOut } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+// Dynamically configure authDomain when running on custom domains to bypass third-party cookie restrictions
+const dynamicConfig = { ...firebaseConfig };
+if (typeof window !== 'undefined') {
+  const host = window.location.hostname;
+  // If we are on a custom production domain (like Vercel, but NOT local dev and NOT AI Studio preview)
+  const isLocalhost = host === 'localhost' || host === '127.0.0.1';
+  const isAiStudio = host.endsWith('run.app');
+  const isDefaultFirebase = host.endsWith('firebaseapp.com') || host.endsWith('web.app');
+  
+  if (!isLocalhost && !isAiStudio && !isDefaultFirebase) {
+    dynamicConfig.authDomain = host;
+  }
+}
+
+const app = initializeApp(dynamicConfig);
 export const auth = getAuth(app);
 
 export const provider = new GoogleAuthProvider();
@@ -21,7 +35,7 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  // Check redirect result on initialization
+  // 1. Handle redirect result
   getRedirectResult(auth)
     .then((result) => {
       isRedirectResultHandled = true;
@@ -32,43 +46,33 @@ export const initAuth = (
           sessionStorage.setItem('oauth_access_token', cachedAccessToken);
           if (result.user && onAuthSuccess) {
             onAuthSuccess(result.user, cachedAccessToken);
-            return;
           }
         }
-      }
-      
-      // If there was no redirect result, but we have an active user with cached token, we succeed
-      const user = auth.currentUser;
-      if (user) {
-        const savedToken = cachedAccessToken || sessionStorage.getItem('oauth_access_token');
-        if (savedToken) {
-          cachedAccessToken = savedToken;
-          if (onAuthSuccess) onAuthSuccess(user, savedToken);
-        } else {
-          if (onAuthFailure) onAuthFailure();
-        }
-      } else {
-        if (onAuthFailure) onAuthFailure();
       }
     })
     .catch((error) => {
       isRedirectResultHandled = true;
       console.error('Redirect sign-in error:', error);
-      if (onAuthFailure) onAuthFailure();
     });
   
-  return onAuthStateChanged(auth, async (user: User | null) => {
+  // 2. Listen to auth state changes
+  return onAuthStateChanged(auth, (user: User | null) => {
     if (user) {
       const savedToken = cachedAccessToken || sessionStorage.getItem('oauth_access_token');
       if (savedToken) {
         cachedAccessToken = savedToken;
         if (onAuthSuccess) onAuthSuccess(user, savedToken);
       } else {
-        // Wait for redirect result to finish
-        if (!isRedirectResultHandled) {
-          return;
-        }
-        if (onAuthFailure) onAuthFailure();
+        // Wait a brief moment to see if getRedirectResult finishes resolving
+        setTimeout(() => {
+          const updatedToken = cachedAccessToken || sessionStorage.getItem('oauth_access_token');
+          if (updatedToken) {
+            cachedAccessToken = updatedToken;
+            if (onAuthSuccess) onAuthSuccess(user, updatedToken);
+          } else {
+            if (onAuthFailure) onAuthFailure();
+          }
+        }, 1200);
       }
     } else {
       cachedAccessToken = null;
