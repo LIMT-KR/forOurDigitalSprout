@@ -1,0 +1,355 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { User } from 'firebase/auth';
+import { SpreadsheetMeta, SheetMeta, SheetData, ColumnAnalysis } from './types';
+import { initAuth, googleSignIn, logout } from './lib/firebase';
+import { fetchSpreadsheetMeta, fetchSheetData, analyzeColumns } from './lib/sheets';
+import SpreadsheetLoader from './components/SpreadsheetLoader';
+import QACards from './components/QACards';
+import { FileSpreadsheet, LogOut, Loader2, HelpCircle, AlertTriangle } from 'lucide-react';
+
+const DEFAULT_SPREADSHEET_ID = '1tHl4qA_lV_ZiML-MFYk70a1gTsnV9qTZLrrMG0Df1Ls';
+
+export default function App() {
+  const [needsAuth, setNeedsAuth] = useState(true);
+  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Spreadsheet states
+  const [spreadsheetId, setSpreadsheetId] = useState(DEFAULT_SPREADSHEET_ID);
+  const [meta, setMeta] = useState<SpreadsheetMeta | null>(null);
+  const [activeSheet, setActiveSheet] = useState<SheetMeta | null>(null);
+  const [sheetData, setSheetData] = useState<SheetData | null>(null);
+  
+  // Loading & Error states
+  const [isLoadingMeta, setIsLoadingMeta] = useState(false);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  // Initialize auth state listener on mount
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (currentUser, accessToken) => {
+        setUser(currentUser);
+        setToken(accessToken);
+        setNeedsAuth(false);
+      },
+      () => {
+        setUser(null);
+        setToken(null);
+        setNeedsAuth(true);
+      }
+    );
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  const handleLogin = async () => {
+    setIsLoggingIn(true);
+    try {
+      const result = await googleSignIn();
+      if (result) {
+        setToken(result.accessToken);
+        setUser(result.user);
+        setNeedsAuth(false);
+      }
+    } catch (err) {
+      console.error('Login failed:', err);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      setUser(null);
+      setToken(null);
+      setMeta(null);
+      setActiveSheet(null);
+      setSheetData(null);
+      setNeedsAuth(true);
+    } catch (err) {
+      console.error('Logout failed:', err);
+    }
+  };
+
+  // Fetch spreadsheet metadata when token or spreadsheetId changes
+  const loadSpreadsheetMetadata = useCallback(async (accessToken: string, targetId: string, gidToLoad?: number | null) => {
+    setIsLoadingMeta(true);
+    setMetaError(null);
+    try {
+      const metadata = await fetchSpreadsheetMeta(accessToken, targetId);
+      setMeta(metadata);
+      if (metadata.sheets.length > 0) {
+        // If gidToLoad is specified, find that sheet. Otherwise, fall back to default target gid 1630650989, or default to the first sheet.
+        const targetGidValue = (gidToLoad !== undefined && gidToLoad !== null) ? gidToLoad : 1630650989;
+        const targetSheet = metadata.sheets.find(s => s.sheetId === targetGidValue) || metadata.sheets[0];
+        setActiveSheet(targetSheet);
+      } else {
+        setActiveSheet(null);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setMetaError(err.message || 'Failed to load spreadsheet details. Please verify access permission.');
+    } finally {
+      setIsLoadingMeta(false);
+    }
+  }, []);
+
+  // Fetch data of active sheet
+  const loadSheetRows = useCallback(async (accessToken: string, targetId: string, sheetTitle: string) => {
+    setIsLoadingData(true);
+    setDataError(null);
+    try {
+      const data = await fetchSheetData(accessToken, targetId, sheetTitle);
+      setSheetData(data);
+    } catch (err: any) {
+      console.error(err);
+      setDataError(err.message || `Failed to fetch data for sheet "${sheetTitle}"`);
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, []);
+
+  // Sync spreadsheet metadata on token/spreadsheetId change
+  useEffect(() => {
+    if (token && spreadsheetId) {
+      loadSpreadsheetMetadata(token, spreadsheetId, null);
+    }
+  }, [token, spreadsheetId, loadSpreadsheetMetadata]);
+
+  // Sync sheet rows
+  const activeSheetTitle = activeSheet?.title;
+  useEffect(() => {
+    if (token && spreadsheetId && activeSheetTitle) {
+      loadSheetRows(token, spreadsheetId, activeSheetTitle);
+    }
+  }, [token, spreadsheetId, activeSheetTitle, loadSheetRows]);
+
+  // Analyze active columns
+  const columnAnalyses = useMemo<ColumnAnalysis[]>(() => {
+    if (!sheetData || sheetData.rows.length === 0) return [];
+    return analyzeColumns(sheetData.columns, sheetData.rows);
+  }, [sheetData]);
+
+  // Handle spreadsheet selection
+  const handleLoadNewSpreadsheet = (newId: string, targetGid?: number | null) => {
+    setSpreadsheetId(newId);
+    if (token) {
+      loadSpreadsheetMetadata(token, newId, targetGid);
+    }
+  };
+
+  // Welcome state renderer
+  if (needsAuth) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center px-4" id="welcome-container">
+        <div className="max-w-md w-full bg-white p-8 rounded-3xl border border-slate-100 shadow-xl space-y-8 text-center">
+          <div className="space-y-4">
+            <div className="mx-auto w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-xs">
+              <HelpCircle className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h1 className="text-2xl font-bold font-display text-slate-900 tracking-tight">
+                Q&A Dashboard
+              </h1>
+              <p className="text-sm text-slate-500 leading-relaxed">
+                Google Spreadsheet에 작성된 예상 질문과 답변을 연동하여 실시간으로 확인하고 검색하는 대시보드 서비스입니다.
+              </p>
+            </div>
+          </div>
+
+          {/* Quick link detail */}
+          <div className="bg-slate-50 p-4 rounded-2xl text-left border border-slate-100 flex items-start gap-3">
+            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl mt-0.5 shrink-0">
+              <HelpCircle className="w-4 h-4" />
+            </div>
+            <div className="text-xs text-slate-600 space-y-1">
+              <div className="font-semibold text-slate-700">실시간 연동형 대시보드</div>
+              <div>질문과 답변이 포함된 Google 시트 주소를 넣으면 카드 형식으로 보기 쉽게 변환되며 시트 수정 시 자동으로 반영됩니다.</div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <button
+              onClick={handleLogin}
+              disabled={isLoggingIn}
+              className="w-full gsi-material-button flex justify-center items-center py-3 px-4 border border-slate-200 rounded-xl hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-xs hover:border-slate-300 transition-all cursor-pointer disabled:opacity-75 disabled:cursor-wait"
+            >
+              <div className="gsi-material-button-content-wrapper flex items-center gap-3">
+                <div className="gsi-material-button-icon w-5 h-5 flex items-center justify-center shrink-0">
+                  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style={{ display: 'block' }}>
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+                  </svg>
+                </div>
+                <span>구글 로그인하여 대시보드 열기</span>
+              </div>
+            </button>
+            <div className="text-[10px] text-slate-400">
+              Only required scopes are requested: <b>spreadsheets.readonly</b>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Dashboard content
+  return (
+    <div className="h-screen bg-[#F9FAFB] flex overflow-hidden font-sans text-slate-900" id="app-root">
+      {/* Left Sidebar */}
+      <aside className="w-80 bg-white border-r border-slate-200 flex flex-col h-full shrink-0">
+        <div className="p-6 flex items-center justify-between border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center">
+              <HelpCircle className="w-4 h-4 text-white" />
+            </div>
+            <span className="font-bold tracking-tight text-lg font-display text-slate-950 font-sans">Q&A Board</span>
+          </div>
+          
+          {/* Sign Out Trigger */}
+          <button
+            onClick={handleLogout}
+            className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-900 rounded-lg transition-all cursor-pointer"
+            title="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* Spreadsheet loader inside sidebar */}
+          <SpreadsheetLoader
+            currentMeta={meta}
+            activeSheet={activeSheet}
+            onSelectSheet={setActiveSheet}
+            onLoadSpreadsheet={handleLoadNewSpreadsheet}
+            isLoading={isLoadingMeta}
+            error={metaError}
+            defaultId={DEFAULT_SPREADSHEET_ID}
+          />
+        </div>
+
+        {/* User details at bottom of sidebar */}
+        {user && (
+          <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center gap-3">
+            {user.photoURL ? (
+              <img
+                referrerPolicy="no-referrer"
+                src={user.photoURL}
+                alt={user.displayName || 'Profile'}
+                className="w-9 h-9 rounded-full border border-slate-200 shadow-xs"
+              />
+            ) : (
+              <div className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-xs font-display">
+                {user.displayName?.charAt(0) || 'U'}
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-bold text-slate-800 truncate">{user.displayName || 'User'}</div>
+              <div className="text-[10px] text-slate-500 truncate">{user.email}</div>
+            </div>
+          </div>
+        )}
+      </aside>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
+        {/* Top Header of Main Area */}
+        <header className="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-8 shrink-0">
+          <div>
+            <h1 className="text-base font-bold font-display text-slate-900 font-sans">
+              {meta ? meta.title : 'Q&A Dashboard'}
+            </h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {activeSheet ? `선택된 시트: ${activeSheet.title}` : '시트를 선택해주세요'}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="text-xs font-bold text-indigo-600 font-mono hidden sm:flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              Google Sheets Live Sync
+            </div>
+            {sheetData && (
+              <button
+                onClick={() => {
+                  const csvContent = [
+                    sheetData.columns,
+                    ...sheetData.rows.map(row => sheetData.columns.map(col => row[col] ?? ''))
+                  ]
+                    .map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+                    .join('\n');
+
+                  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                  const url = URL.createObjectURL(blob);
+                  const link = document.createElement('a');
+                  link.setAttribute('href', url);
+                  link.setAttribute('download', `${sheetData.sheetTitle}_export.csv`);
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                }}
+                className="px-3.5 py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 hover:text-slate-950 rounded-xl text-xs font-bold cursor-pointer transition-all"
+              >
+                CSV 내보내기
+              </button>
+            )}
+          </div>
+        </header>
+
+        {/* Main Inner Content - scrollable */}
+        <div className="flex-1 overflow-y-auto p-8">
+          {isLoadingData ? (
+            <div className="bg-white p-12 rounded-2xl border border-slate-200 flex flex-col items-center justify-center min-h-[450px] shadow-xs">
+              <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mb-4" />
+              <p className="text-sm text-slate-500 font-bold">실시간 스프레드시트 데이터 불러오는 중...</p>
+              <p className="text-xs text-slate-400 mt-1">Google APIs를 통해 동기화하는 중입니다</p>
+            </div>
+          ) : dataError ? (
+            <div className="bg-white p-8 rounded-2xl border border-slate-200 flex flex-col items-center justify-center min-h-[450px] text-center space-y-4 shadow-xs">
+              <div className="p-4 bg-rose-50 text-rose-600 rounded-full">
+                <AlertTriangle className="w-8 h-8" />
+              </div>
+              <div className="max-w-sm space-y-1">
+                <h3 className="text-sm font-bold text-slate-900">시트 로드 실패</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">{dataError}</p>
+              </div>
+              <button
+                onClick={() => activeSheetTitle && loadSheetRows(token!, spreadsheetId, activeSheetTitle)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl cursor-pointer transition-all"
+              >
+                다시 시도
+              </button>
+            </div>
+          ) : sheetData ? (
+            <div className="space-y-6">
+              <QACards
+                columns={sheetData.columns}
+                rows={sheetData.rows}
+                onRefresh={() => {
+                  if (activeSheetTitle) {
+                    loadSheetRows(token!, spreadsheetId, activeSheetTitle);
+                  }
+                }}
+                isRefreshing={isLoadingData}
+              />
+            </div>
+          ) : (
+            <div className="bg-white p-12 rounded-2xl border border-slate-200 flex flex-col items-center justify-center min-h-[450px] shadow-xs">
+              <FileSpreadsheet className="w-10 h-10 text-slate-300 mb-3" />
+              <p className="text-sm text-slate-500 font-bold">활성화된 시트가 없습니다.</p>
+              <p className="text-xs text-slate-400 mt-1">왼쪽 사이드바에서 시트를 선택해주시면 실시간 카드가 연동됩니다.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

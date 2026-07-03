@@ -1,0 +1,6 @@
+{
+  "name": "Google Sheets Dashboard",
+  "description": "A dashboard application that fetches, processes, and visualizes data from a Google Sheet with interactive charts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
