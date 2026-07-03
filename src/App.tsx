@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { User } from 'firebase/auth';
 import { SpreadsheetMeta, SheetMeta, SheetData, ColumnAnalysis } from './types';
-import { initAuth, googleSignIn, logout } from './lib/firebase';
+import { initAuth, googleSignIn, logout, googleSignInWithRedirect } from './lib/firebase';
 import { fetchSpreadsheetMeta, fetchSheetData, analyzeColumns } from './lib/sheets';
 import SpreadsheetLoader from './components/SpreadsheetLoader';
 import QACards from './components/QACards';
@@ -14,6 +14,8 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [showPopupBlockedHelp, setShowPopupBlockedHelp] = useState(false);
 
   // Spreadsheet states
   const [spreadsheetId, setSpreadsheetId] = useState(DEFAULT_SPREADSHEET_ID);
@@ -48,6 +50,8 @@ export default function App() {
 
   const handleLogin = async () => {
     setIsLoggingIn(true);
+    setLoginError(null);
+    setShowPopupBlockedHelp(false);
     try {
       const result = await googleSignIn();
       if (result) {
@@ -55,9 +59,29 @@ export default function App() {
         setUser(result.user);
         setNeedsAuth(false);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Login failed:', err);
+      if (err.code === 'auth/popup-blocked' || String(err).includes('popup-blocked')) {
+        setShowPopupBlockedHelp(true);
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setLoginError('Vercel 배포 도메인이 Firebase 승인된 도메인에 등록되지 않았습니다. Firebase 콘솔 설정을 확인해주세요.');
+      } else {
+        setLoginError(err.message || '로그인 중 오류가 발생했습니다.');
+      }
     } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleRedirectLogin = async () => {
+    setIsLoggingIn(true);
+    setLoginError(null);
+    setShowPopupBlockedHelp(false);
+    try {
+      await googleSignInWithRedirect();
+    } catch (err: any) {
+      console.error('Redirect login failed:', err);
+      setLoginError(err.message || '리디렉션 로그인 실패');
       setIsLoggingIn(false);
     }
   };
@@ -173,7 +197,14 @@ export default function App() {
             </div>
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-4">
+            {loginError && (
+              <div className="bg-rose-50 border border-rose-100 p-3 rounded-2xl text-left text-xs text-rose-600 font-medium leading-relaxed flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <span>{loginError}</span>
+              </div>
+            )}
+
             <button
               onClick={handleLogin}
               disabled={isLoggingIn}
@@ -188,9 +219,40 @@ export default function App() {
                     <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
                   </svg>
                 </div>
-                <span>구글 로그인하여 대시보드 열기</span>
+                <span>구글 로그인 (팝업창 방식)</span>
               </div>
             </button>
+
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-slate-200"></div>
+              <span className="flex-shrink mx-4 text-slate-400 text-[10px] font-medium">또는</span>
+              <div className="flex-grow border-t border-slate-200"></div>
+            </div>
+
+            <button
+              onClick={handleRedirectLogin}
+              disabled={isLoggingIn}
+              className="w-full py-2.5 px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/50 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-75"
+            >
+              {isLoggingIn ? '화면 전환하는 중...' : '구글 로그인 (화면 전환방식 - 팝업차단 해결)'}
+            </button>
+
+            {showPopupBlockedHelp && (
+              <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-left text-xs text-amber-800 space-y-3 leading-relaxed">
+                <div className="flex gap-2 font-bold items-center text-amber-900">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
+                  <span>브라우저 팝업이 차단되었습니다!</span>
+                </div>
+                <p>
+                  현재 브라우저에서 팝업이 차단되어 로그인 창이 열리지 않았습니다. 상단의 <b>화면 전환방식</b> 버튼을 사용하시거나, 브라우저 주소창 우측에서 팝업 허용을 설정해 주세요.
+                </p>
+                <div className="bg-white/60 p-2.5 rounded-xl border border-amber-100 text-[10px]">
+                  <span className="font-bold block mb-1 text-amber-900">💡 배포 도메인 설정 안내:</span>
+                  Vercel 배포 후 구글 로그인을 사용하려면 Firebase 콘솔의 <b>Authentication - Settings - Authorized domains</b>에 <code>for-our-digital-sprout.vercel.app</code> 도메인을 반드시 등록하셔야 합니다.
+                </div>
+              </div>
+            )}
+
             <div className="text-[10px] text-slate-400">
               Only required scopes are requested: <b>spreadsheets.readonly</b>
             </div>

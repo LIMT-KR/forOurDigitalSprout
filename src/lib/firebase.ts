@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User, signOut } from 'firebase/auth';
+import { getAuth, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, User, signOut } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -20,19 +20,34 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  // Try to load cached token from sessionStorage as a fallback, or just handle states.
-  // Note: the skill states "You MUST implement in-memory caching for the access token. Do NOT store the access token in localStorage or sessionStorage."
-  // So we only keep it in cachedAccessToken memory variable.
+  // Check redirect result on initialization
+  getRedirectResult(auth)
+    .then((result) => {
+      if (result) {
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          cachedAccessToken = credential.accessToken;
+          if (result.user && onAuthSuccess) {
+            onAuthSuccess(result.user, cachedAccessToken);
+          }
+        }
+      }
+    })
+    .catch((error) => {
+      console.error('Redirect sign-in error:', error);
+    });
   
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
       if (cachedAccessToken) {
         if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
       } else if (!isSigningIn) {
-        // If we have a user but no in-memory token (e.g. page refresh),
-        // we might need to prompt the user to sign-in again to refresh the access token.
-        cachedAccessToken = null;
-        if (onAuthFailure) onAuthFailure();
+        // Wait a brief moment to see if getRedirectResult is currently resolving
+        setTimeout(() => {
+          if (!cachedAccessToken && !isSigningIn) {
+            if (onAuthFailure) onAuthFailure();
+          }
+        }, 800);
       }
     } else {
       cachedAccessToken = null;
@@ -59,6 +74,12 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
   } finally {
     isSigningIn = false;
   }
+};
+
+// Start a redirect sign in flow
+export const googleSignInWithRedirect = async (): Promise<void> => {
+  isSigningIn = true;
+  await signInWithRedirect(auth, provider);
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
