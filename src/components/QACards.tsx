@@ -42,17 +42,20 @@ export default function QACards({ columns, rows, onRefresh, isRefreshing }: QACa
     if (!isAutoSync) return;
 
     const timer = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          onRefreshRef.current();
-          return 30;
-        }
-        return prev - 1;
-      });
+      setCountdown(prev => prev - 1);
     }, 1000);
 
     return () => clearInterval(timer);
   }, [isAutoSync]);
+
+  // Trigger refresh when countdown hits 0
+  useEffect(() => {
+    if (!isAutoSync) return;
+    if (countdown <= 0) {
+      onRefreshRef.current();
+      setCountdown(30);
+    }
+  }, [countdown, isAutoSync]);
 
   // Intelligent column auto-detection
   useEffect(() => {
