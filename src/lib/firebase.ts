@@ -2,21 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, User, signOut } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-// Dynamically configure authDomain when running on custom domains to bypass third-party cookie restrictions
-const dynamicConfig = { ...firebaseConfig };
-if (typeof window !== 'undefined') {
-  const host = window.location.hostname;
-  // If we are on a custom production domain (like Vercel, but NOT local dev and NOT AI Studio preview)
-  const isLocalhost = host === 'localhost' || host === '127.0.0.1';
-  const isAiStudio = host.endsWith('run.app');
-  const isDefaultFirebase = host.endsWith('firebaseapp.com') || host.endsWith('web.app');
-  
-  if (!isLocalhost && !isAiStudio && !isDefaultFirebase) {
-    dynamicConfig.authDomain = host;
-  }
-}
-
-const app = initializeApp(dynamicConfig);
+const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
 export const provider = new GoogleAuthProvider();

@@ -3,9 +3,10 @@ import { User } from 'firebase/auth';
 import { SpreadsheetMeta, SheetMeta, SheetData, ColumnAnalysis } from './types';
 import { initAuth, googleSignIn, logout, googleSignInWithRedirect } from './lib/firebase';
 import { fetchSpreadsheetMeta, fetchSheetData, analyzeColumns } from './lib/sheets';
+import { GUEST_METADATA, GUEST_SHEETS_DATA } from './lib/guestData';
 import SpreadsheetLoader from './components/SpreadsheetLoader';
 import QACards from './components/QACards';
-import { FileSpreadsheet, LogOut, Loader2, HelpCircle, AlertTriangle } from 'lucide-react';
+import { FileSpreadsheet, LogOut, Loader2, HelpCircle, AlertTriangle, Eye } from 'lucide-react';
 
 const DEFAULT_SPREADSHEET_ID = '1tHl4qA_lV_ZiML-MFYk70a1gTsnV9qTZLrrMG0Df1Ls';
 
@@ -16,6 +17,7 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [showPopupBlockedHelp, setShowPopupBlockedHelp] = useState(false);
+  const [showTroubleshooting, setShowTroubleshooting] = useState(false);
 
   // Spreadsheet states
   const [spreadsheetId, setSpreadsheetId] = useState(DEFAULT_SPREADSHEET_ID);
@@ -88,7 +90,9 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      await logout();
+      if (token !== 'guest_token') {
+        await logout();
+      }
       setUser(null);
       setToken(null);
       setMeta(null);
@@ -100,11 +104,33 @@ export default function App() {
     }
   };
 
+  const handleGuestLogin = () => {
+    setNeedsAuth(false);
+    setToken('guest_token');
+    setUser({
+      displayName: '체험용 계정 (Guest)',
+      email: 'guest@example.com',
+      photoURL: null,
+    } as any);
+  };
+
   // Fetch spreadsheet metadata when token or spreadsheetId changes
   const loadSpreadsheetMetadata = useCallback(async (accessToken: string, targetId: string, gidToLoad?: number | null) => {
     setIsLoadingMeta(true);
     setMetaError(null);
     try {
+      if (accessToken === 'guest_token') {
+        // Return GUEST_METADATA mock data after a brief realistic delay
+        await new Promise(resolve => setTimeout(resolve, 500));
+        setMeta(GUEST_METADATA);
+        if (GUEST_METADATA.sheets.length > 0) {
+          const targetSheet = GUEST_METADATA.sheets[0];
+          setActiveSheet(targetSheet);
+        } else {
+          setActiveSheet(null);
+        }
+        return;
+      }
       const metadata = await fetchSpreadsheetMeta(accessToken, targetId);
       setMeta(metadata);
       if (metadata.sheets.length > 0) {
@@ -128,6 +154,18 @@ export default function App() {
     setIsLoadingData(true);
     setDataError(null);
     try {
+      if (accessToken === 'guest_token') {
+        // Return GUEST_SHEETS_DATA mock data after a brief realistic delay
+        await new Promise(resolve => setTimeout(resolve, 400));
+        const data = GUEST_SHEETS_DATA[sheetTitle] || {
+          sheetTitle,
+          columns: [],
+          rows: [],
+          rawValues: []
+        };
+        setSheetData(data);
+        return;
+      }
       const data = await fetchSheetData(accessToken, targetId, sheetTitle);
       setSheetData(data);
     } catch (err: any) {
@@ -161,6 +199,10 @@ export default function App() {
 
   // Handle spreadsheet selection
   const handleLoadNewSpreadsheet = (newId: string, targetGid?: number | null) => {
+    if (token === 'guest_token') {
+      setMetaError('본인의 구글 스프레드시트를 연동하여 실시간으로 사용하시려면 구글 계정 로그인이 필요합니다. (체험하기 모드에서는 샘플 데이터만 제공됩니다)');
+      return;
+    }
     setSpreadsheetId(newId);
     if (token) {
       loadSpreadsheetMetadata(token, newId, targetGid);
@@ -236,6 +278,98 @@ export default function App() {
             >
               {isLoggingIn ? '화면 전환하는 중...' : '구글 로그인 (화면 전환방식 - 팝업차단 해결)'}
             </button>
+
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-slate-200"></div>
+              <span className="flex-shrink mx-4 text-slate-400 text-[10px] font-medium">로그인이 어려우신가요?</span>
+              <div className="flex-grow border-t border-slate-200"></div>
+            </div>
+
+            <button
+              onClick={handleGuestLogin}
+              className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+            >
+              <Eye className="w-4.5 h-4.5 shrink-0" />
+              <span>로그인 없이 샘플 데이터로 체험하기</span>
+            </button>
+
+            <div className="pt-2">
+              <button
+                onClick={() => setShowTroubleshooting(!showTroubleshooting)}
+                className="w-full py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-slate-500" />
+                <span>구글 로그인 오류 (400, 403 등) 해결 가이드 {showTroubleshooting ? '▲' : '▼'}</span>
+              </button>
+
+              {showTroubleshooting && (
+                <div className="mt-3 bg-slate-50 border border-slate-200/60 rounded-2xl p-4 text-left text-xs text-slate-600 space-y-4 leading-relaxed max-h-[300px] overflow-y-auto custom-scrollbar shadow-xs">
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                      400 오류: redirect_uri_mismatch
+                    </h4>
+                    <p className="text-[11px] pl-3 text-slate-500">
+                      Vercel 등의 커스텀 도메인 배포 후 로그인 시 Google의 승인 리디렉션 목록에 등록되지 않아 발생합니다.
+                    </p>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-100 text-[11px] font-mono space-y-1 pl-3 text-slate-700">
+                      <span className="font-bold text-indigo-600">해결방법:</span>
+                      <ol className="list-decimal list-inside space-y-1 text-[10px] text-slate-600">
+                        <li><a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Google Cloud Console</a>에 접속</li>
+                        <li><b>API 및 서비스 &gt; 사용자 인증 정보</b>로 이동</li>
+                        <li>OAuth 2.0 클라이언트 ID 아래의 <b>웹 클라이언트 (Web client)</b>를 편집</li>
+                        <li><b>승인된 리디렉션 URI</b>에 아래 주소를 등록하고 저장:</li>
+                        <code className="block bg-slate-100 p-1.5 rounded border border-slate-200 mt-1 select-all break-all text-[9.5px]">
+                          https://for-our-digital-sprout.vercel.app/__/auth/handler
+                        </code>
+                      </ol>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                      403 오류: access_denied / 승인 완료하지 않음
+                    </h4>
+                    <p className="text-[11px] pl-3 text-slate-500">
+                      구글 클라우드 콘솔의 OAuth 동의 화면이 '테스트(Testing)' 상태일 때, 등록되지 않은 이메일로 로그인하여 차단되는 현상입니다.
+                    </p>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-100 text-[11px] font-mono space-y-1 pl-3 text-slate-700">
+                      <span className="font-bold text-indigo-600">해결방법:</span>
+                      <ul className="list-disc list-inside space-y-1 text-[10px] text-slate-600">
+                        <li>Google Cloud Console의 <b>OAuth 동의 화면 (OAuth consent screen)</b> 메뉴로 이동</li>
+                        <li><b>테스트 사용자 (Test users)</b> 탭에서 <b>[Add Users]</b>를 클릭</li>
+                        <li>로그인하려는 구글 이메일(예: <code>lhy0614@gmail.com</code>)을 추가 및 저장</li>
+                        <li>또는 앱 상태를 <b>[앱 게시 (Publish App)]</b>로 변경하여 프로덕션으로 전환</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                      팝업창 로그인 오류 / 무반응
+                    </h4>
+                    <p className="text-[11px] pl-3 text-slate-500">
+                      브라우저의 팝업 차단 기능 때문에 구글 팝업창이 차단되어 로그인 창이 열리지 않을 때 발생합니다.
+                    </p>
+                    <p className="text-[10px] pl-3 text-slate-700">
+                      <b>해결방법:</b> 상단의 <b>"구글 로그인 (화면 전환방식)"</b> 버튼을 누르시면 전체 화면 전환으로 안전하게 로그인 가능합니다.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1 border-t border-slate-200/80 pt-2.5">
+                    <h4 className="font-bold text-emerald-700 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                      가장 빠르고 간편한 방법
+                    </h4>
+                    <p className="text-[10px] pl-3 text-slate-600">
+                      아무런 복잡한 구글 설정 없이 즉시 대시보드를 둘러보시려면 바로 위 <b>'로그인 없이 샘플 데이터로 체험하기'</b> 버튼을 클릭해 보세요! 모든 대시보드 화면, 카테고리 필터, 상세 보기 팝업 및 검색 기능이 정상 동작합니다.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {showPopupBlockedHelp && (
               <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl text-left text-xs text-amber-800 space-y-3 leading-relaxed">
